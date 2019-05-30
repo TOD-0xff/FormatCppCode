@@ -12,7 +12,6 @@ using std::endl;
 //换行 
 void NewLine(string &f)
 {
-	//f.append(1,'\r');
 	f.append(1,'\n');
 }
 //缩进 
@@ -33,9 +32,11 @@ void ClearFormat(string& f)
 	//位开关标识：
 	/*  0x80 代表单行注释 
 		0x40 刚出现过/符号
-		0x20 刚出现过*符号 
+		0x20 刚出现过*符号
+		0x10 代表多行注释刚结束(意味着遇到'*''/'组合)
 		0x81 代表多行注释
-	*/ 
+		0x02 代表出现':'，遇到换行符置0
+	*/
 	
 	string newf="";
 	string::iterator iter = f.begin();
@@ -43,13 +44,15 @@ void ClearFormat(string& f)
 	while(iter!=f.end())
 	{
 		c = *iter;
-		
+
+		if(c==':') commentMode |=0x02;
+
 		if(c=='\r' || c=='\t')
 		{
 			iter++;
 			continue;
 		}
-		
+		//格式化多余换行符
 		if(c=='\n')
 		{
 			//预处理、注释、引用中的换行符保留
@@ -68,20 +71,33 @@ void ClearFormat(string& f)
 				NewLine(newf);
 				precode = false;
 			}
+			else if(commentMode&0x10)
+			{
+				//多行注释刚结束则保留换行符
+				commentMode =0;
+				NewLine(newf);
+			}
+			else if(commentMode&0x02)
+			{
+				commentMode&=(~0x02);
+				if( !quote && !(commentMode&0x80) ) NewLine(newf);
+			}
+
 			iter++;
 			continue;
 		}
 		
-		if(c=='\"')
+		if((c=='\"' || c=='\'')&& (!(commentMode&0x80)) &&(!precode))
 		{
 			quote = !quote;
 		}
 		//非注释或引用模式下出现'#'则意味着预处理语句，不考虑'##'的情形
 		if(c=='#' &&(!quote) && (!(commentMode&0x80)) ) precode =true;
 
-		if((!quote)&&((commentMode&0x80)==0))
+		if((!quote)&&(!(commentMode&0x80)))
 		{
-
+			//当不是引用模式或注释模式时格式化
+			//格式化多余空格
 			if(c==' ' && !neword)
 			{
 			}
@@ -100,11 +116,13 @@ void ClearFormat(string& f)
 				if(c=='/')
 				{
 					if((commentMode&0x40)!=0) commentMode |=0x80;
+					commentMode &=(~0x20);
 					commentMode |= 0x40;
 				}
 				else if(c=='*')
 				{
 					if((commentMode&0x40)!=0) commentMode |=0x81;
+					commentMode &=(~0x40);
 					commentMode |= 0x20;
 				}
 				else
@@ -112,17 +130,26 @@ void ClearFormat(string& f)
 					commentMode &= (~0x60);
 				}
 				//指针或地址引用符号后空格保留
-				if(!(c=='*' || c=='&')) neword=false;
+				switch (c)
+				{
+					case '*':
+					case '&':
+					case '_':
+						neword = true;
+						break;
+					default:
+						neword = false;
+				}
 				newf.append(1,c);
 			}	
 		}
 		else
 		{	//若是引用或者注释则不格式化
-			if(commentMode&80)
+			if(commentMode&0x80)
 			{
-				if(c=='*') commentMode &=0x20;
-				else if(c=='/' &&(commentMode&0x20)) commentMode = 0;
-				else commentMode &= (~0x60);
+				if(c=='*') commentMode |=0x20;
+				else if(c=='/' &&(commentMode&0x20)) commentMode = 0x10;
+				else commentMode &= (~(0x40|0x20|0x10));
 			}
 			newf.append(1,c);	
 		}
@@ -136,36 +163,95 @@ void Reformat(string& f)
 	string newf;
 	int tabs=0;
 	
-	bool afterNL = false;		//标示是否已经换行 
-	bool paramMode = false;		//判断是否为括号模式，即语句参数状态下 
-	bool quoteMode = false;
+	bool afterNL = false;		//标示是否已经换行
+	bool backslash = false;		//反斜杠最近出现
+
+	unsigned char mode = 0;
+	unsigned char ct = 0;		//圆括号叠加次数，用于判断是否处于括号状态
+	/*
+	位模式：
+	0x80 单行注释
+	0x90 多行注释
+	0x40 上一循环出现'/'
+	0x20 上一循环出现'*'
+	0x08 括号状态
+	0x04 引号状态（默认双引号）
+	0x02 预处理状态
+	0x05 单引号模式
+	其中注释状态0x80，括号状态0x08，引号状态0x04，预处理0x02 生效时位设为1
+	括号状态下引号状态可以生效，反之不成立
+	其余各状态互斥
+	*/
 	 
 	string::iterator iter=f.begin();
 	char c='\0';
 	while(iter!=f.end())
 	{
 		c= *iter;
-		if(c=='(' && !paramMode)
+
+		if(c=='(' && !(mode&(0x80|0x04|0x02)))
 		{
-			paramMode = true;
+			mode |=0x08;
+			ct++;
 		}
-		else if (c==')' && paramMode)
+		else if (c==')' && !(mode&(0x80|0x04|0x02)))
 		{
-			paramMode = false;
+			if(--ct==0)mode &=(~0x08);
 		}
-		else if(c=='"')
+		else if(c=='#' && !(mode&(0x80|0x08|0x04)))
 		{
-			quoteMode =!quoteMode;
+			mode |= 0x02;
 		}
-		
-		if(quoteMode||paramMode)
+		else if((c=='\"') &&!backslash &&!(mode&(0x80|0x02)) )
 		{
-			//引用或参数模式则不格式化
+			if(!(mode&0x04))mode|=0x04;
+			else if((mode&0x05)==0x04) mode &=(~0x04);
+		}
+		else if(c=='\'' &&!backslash &&!(mode&(0x80|0x02)) )
+		{
+			if(!(mode&0x04))mode|=0x05;
+			else if((mode&0x05)==0x05) mode &=(~0x05);
+		}
+		else if(c=='/' && !(mode&(0x08|0x04|0x02)))
+		{
+			if(mode&0x40) mode|=0x80;else if(mode&0x20) mode &=(~0x90);
+			mode &=(~0x20);
+			mode |= 0x40;
+		}
+		else if(c=='*' && !(mode&(0x08|0x04|0x02)))
+		{
+			if(mode&0x40) mode|=0x90;
+			mode &=(~0x40);
+			mode |= 0x20;
+		}
+		else if(c=='\n')
+		{
+			if(!(mode&(0x08|0x04|0x02)))
+			{
+				//若当前为单行注释模式，遇换行符则认为注释结束
+				if((mode&(0x80|0x90))==0x80) mode&=(~0x80);
+			}
+			else if(!(mode&(0x80|0x08|0x04)))
+			{
+				mode &=(~0x02);		//预处理模式下遇到换行则认为预处理结束
+			}
+		}
+
+		backslash =((c=='\\')?true:false);
+
+		if(c!='*' && c!='/')
+		{
+			mode &=(~(0x40|0x20));
+		}
+		//当处于注释、括号、引号、预处理任一模式时则不进行格式化
+		if(mode&(0x80|0x08|0x04|0x02))
+		{
 			newf.append(1,c);
+			if(c!='\n') afterNL=false; else afterNL = true;
 			iter++;
 			continue;
 		} 
-		
+		//格式化识别
 		switch(c)
 		{
 			case '{': 
@@ -208,7 +294,7 @@ void Reformat(string& f)
 				break;
 			default:
 				if(afterNL) Tab(newf,tabs);
-				newf.append(1,c);
+				if(!(c=='\n'&&afterNL)) newf.append(1,c);
 				if(c!='\n')afterNL=false; else afterNL = true;
 				break;					
 		}
@@ -220,6 +306,7 @@ void Reformat(string& f)
 
 bool Format(char *fname)
 {
+	//打开待排版文件
 	fstream codefile;
 	codefile.open(fname,ios::in|ios::out);
 	if(!codefile.is_open())
@@ -227,37 +314,31 @@ bool Format(char *fname)
 		codefile.close();
 		return false;
 	}
-	//
-	//codefile.seekg(0,ios::end);
-	//int len = (int)codefile.tellg();
-	//std::cout<<"File Length= " <<len<<std::endl;
-	//codefile.seekg(0,ios::beg);
-	//char* document = new char[len];
-	//
-	//codefile.read(document,len);
-	//
-	//string newdoc = document;
-	//std::cout<<"====OriginCode===\n"<<newdoc<<std::endl;
-	//delete[] document;
-	//ClearFormat(newdoc);
-	//std::cout<<"====ClearFormatCode===\n"<<newdoc<<std::endl;
-	//Reformat(newdoc);
-	//std::cout<<"====ReFormatCode===\n"<<newdoc<<std::endl;
-	////std::cout<<newdoc.length()<<std::endl;
-	//
-	//fstream nfile("nfile.cpp",ios::binary|ios::out);
-	//document = const_cast<char*>(newdoc.c_str());
-	//nfile.write(document,newdoc.length());
-	//codefile.close();
-	//nfile.close();
+	//得到文件大小
+	codefile.seekg(0,ios::end);
+	int len = (int)codefile.tellg();
+	//读取文件到c_string
+	codefile.seekg(0);
+	char* mydoc = new char[len];
+	codefile.get(mydoc,len,EOF);
+	codefile.close();
+	//排版
+	string document = mydoc;
+	delete[] mydoc;
+	ClearFormat(document);
+	Reformat(document);
+	//排版后代码存入新文件中
+	fstream nfile("new.cpp",ios::out);
+	nfile<<document;
+	nfile.close();
 
-	return true;
+	return nfile.good();
 }
 
 int main(int argc, char** argv) 
 {
 	//string mycpp=
-	//"// Format.cpp\n//\n#include \"stdafx.h\"\n\nint _tmain(int argc, _TCHAR* argv[])\n{\n	return 0;\n}";
+	//"// Format.cpp\n//\n#include \"stdafx.h\"\n\n/*this is commment;\n;and it's in mutliline.*/\nint _tmain(int argc, _TCHAR* argv[])\n{\n	return 0;\n}";
 	//std::cout<<"=====Origin Code:====="<<endl;
 	//cout<<mycpp;
 	//cout<<endl<<"====Clear Format:===="<<endl;
@@ -285,7 +366,7 @@ int main(int argc, char** argv)
 			std::cout<<"排版完成，请在相关目录下查看!\n";
 		}
 	}
-	getchar();
+	system("pause");
 	return 0;	
 	
 }
