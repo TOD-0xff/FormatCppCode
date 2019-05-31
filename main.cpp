@@ -24,7 +24,7 @@ void Tab(string& f,int tabs)
 //清除字符串中所有换行符以及多余空格 
 void ClearFormat(string& f)
 {
-	bool neword = false;
+	bool neword = false;			//新单词起始标志
 	bool quote = false;				//引用模式 
 	bool precode = false;			//预处理模式
 	unsigned char commentMode = 0;	//位模式
@@ -98,13 +98,13 @@ void ClearFormat(string& f)
 		{
 			//当不是引用模式或注释模式时格式化
 			//格式化多余空格
-			if(c==' ' && !neword)
+			if(c==' ')
 			{
-			}
-			else if(c==' ' && neword)
-			{
-				neword = false;
-				newf.append(1,c);
+				if(neword)
+				{
+					newf.append(1,c);
+					neword = false;
+				}
 			}
 			else if(isalnum(c))
 			{
@@ -113,22 +113,6 @@ void ClearFormat(string& f)
 			}
 			else
 			{
-				if(c=='/')
-				{
-					if((commentMode&0x40)!=0) commentMode |=0x80;
-					commentMode &=(~0x20);
-					commentMode |= 0x40;
-				}
-				else if(c=='*')
-				{
-					if((commentMode&0x40)!=0) commentMode |=0x81;
-					commentMode &=(~0x40);
-					commentMode |= 0x20;
-				}
-				else
-				{
-					commentMode &= (~0x60);
-				}
 				//指针或地址引用符号后空格保留
 				switch (c)
 				{
@@ -141,7 +125,24 @@ void ClearFormat(string& f)
 						neword = false;
 				}
 				newf.append(1,c);
-			}	
+			}
+			//识别注释标志
+			if(c=='/')
+			{
+				if((commentMode&0x40)!=0) commentMode |=0x80;
+				commentMode &=(~0x20);
+				commentMode |= 0x40;
+			}
+			else if(c=='*')
+			{
+				if((commentMode&0x40)!=0) commentMode |=0x81;
+				commentMode &=(~0x40);
+				commentMode |= 0x20;
+			}
+			else
+			{
+				commentMode &= (~(0x40|0x20));
+			}
 		}
 		else
 		{	//若是引用或者注释则不格式化
@@ -247,7 +248,7 @@ void Reformat(string& f)
 		if(mode&(0x80|0x08|0x04|0x02))
 		{
 			newf.append(1,c);
-			if(c!='\n') afterNL=false; else afterNL = true;
+			afterNL=( (c=='\n')?true:false );
 			iter++;
 			continue;
 		} 
@@ -293,9 +294,14 @@ void Reformat(string& f)
 				newf.append(1,'#');
 				break;
 			default:
-				if(afterNL) Tab(newf,tabs);
-				if(!(c=='\n'&&afterNL)) newf.append(1,c);
-				if(c!='\n')afterNL=false; else afterNL = true;
+				if(!(c=='\n'&&afterNL))
+				{
+					//若已经换过行再次出现换行符则直接忽略该操作
+					//换行后缩进
+					if(afterNL) Tab(newf,tabs);
+					newf.append(1,c);
+				}
+				afterNL=( (c=='\n')?true:false );
 				break;					
 		}
 		iter++;
@@ -337,8 +343,9 @@ bool Format(char *fname)
 
 int main(int argc, char** argv) 
 {
-	//string mycpp=
-	//"// Format.cpp\n//\n#include \"stdafx.h\"\n\n/*this is commment;\n;and it's in mutliline.*/\nint _tmain(int argc, _TCHAR* argv[])\n{\n	return 0;\n}";
+	//string mycpp1=
+	//"int _tmain(int argc, _TCHAR* argv[])\n{\nstd::string f=\"hello:world\";\ncase:\nreturn 0;\n}";
+	//string mycpp="int main()\n{\tstd::string f;\n\tcase:\n\treturn 0;\n}";
 	//std::cout<<"=====Origin Code:====="<<endl;
 	//cout<<mycpp;
 	//cout<<endl<<"====Clear Format:===="<<endl;
